@@ -5,27 +5,35 @@ import android.os.Handler;
 import android.os.Looper;
 import android.preference.PreferenceManager;
 import android.widget.Button;
+import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 import org.osmdroid.config.Configuration;
+import org.osmdroid.events.MapEventsReceiver;
 import org.osmdroid.tileprovider.tilesource.ITileSource;
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase;
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
 import org.osmdroid.tileprovider.tilesource.XYTileSource;
+import org.osmdroid.util.BoundingBox;
 import org.osmdroid.util.MapTileIndex;
 import org.osmdroid.views.MapView;
 import org.osmdroid.api.IMapController;
 import org.osmdroid.util.GeoPoint;
+import org.osmdroid.views.overlay.FolderOverlay;
+import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polyline;
 
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.UUID;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements MapEventsReceiver {
 
     private MapView map;
     private Marker droneMarker; // 無人機標記
@@ -33,9 +41,13 @@ public class MainActivity extends AppCompatActivity {
 
     private Handler handler;
     private Runnable moveDroneRunnable;
-    private Button switchLayerButton;
+    private Button btn_switchLayer;
     private static final int MOVE_INTERVAL = 1000; // 每秒移動一次
     private List<ITileSource> tileSources;
+    private LinkedHashMap<String, GeoPoint> waypointDict;
+
+    private FolderOverlay markersFolder;
+    private Button btn_center;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -46,8 +58,9 @@ public class MainActivity extends AppCompatActivity {
                 PreferenceManager.getDefaultSharedPreferences(getApplicationContext()));
         map = (MapView) findViewById(R.id.mapview);
         // 基本地圖設置
-        map.setTileSource(TileSourceFactory.MAPNIK);
+//        map.setTileSource(TileSourceFactory.MAPNIK);
         map.setMultiTouchControls(true);
+        map.getOverlays().add(0, new MapEventsOverlay(this)); // 添加到第一層，這樣不會被其他覆蓋層擋住
 
         // 初始化地圖控制器
         IMapController mapController = map.getController();
@@ -65,8 +78,13 @@ public class MainActivity extends AppCompatActivity {
 
         initRandomMovement();
 
-        switchLayerButton = findViewById(R.id.switch_layer_button);
-        switchLayerButton.setOnClickListener(v -> toggleMapLayer());
+        btn_switchLayer = findViewById(R.id.btn_switch_layer);
+        btn_switchLayer.setOnClickListener(v -> toggleMapLayer());
+
+        btn_center = (Button) findViewById(R.id.btn_center);
+        btn_center.setOnClickListener(v -> centerOnRoute());
+
+
         initOnlineMap();
         toggleMapLayer();
     }
@@ -80,7 +98,7 @@ public class MainActivity extends AppCompatActivity {
         ITileSource iTileSource = sources.get(tileSourcesIndex);
         tileSourcesIndex = (tileSourcesIndex + 1) % sources.size();
         map.setTileSource(iTileSource);
-        switchLayerButton.setText("切換到" + sources.get(tileSourcesIndex).name()+"地圖");
+        btn_switchLayer.setText("切換到" + sources.get(tileSourcesIndex).name() + "地圖");
         map.invalidate();
     }
 
@@ -94,40 +112,23 @@ public class MainActivity extends AppCompatActivity {
 
     private void initWaypoints() {
         // 創建航點列表（示例航點）
-        List<GeoPoint> waypoints = new ArrayList<>();
-        waypoints.add(new GeoPoint(25.0330, 121.5654)); // 航點1
-        waypoints.add(new GeoPoint(25.0340, 121.5664)); // 航點2
-        waypoints.add(new GeoPoint(25.0350, 121.5674)); // 航點3
-
-        // 在地圖上標記航點
-        for (GeoPoint point : waypoints) {
-            Marker waypoint = new Marker(map);
-            waypoint.setPosition(point);
-            waypoint.setIcon(ContextCompat.getDrawable(this, android.R.drawable.ic_menu_myplaces));
-            waypoint.setTitle("航點");
-            map.getOverlays().add(waypoint);
-        }
-
-        // 繪製航點之間的連線
+        waypointDict = new LinkedHashMap<>();
         pathPolyline = new Polyline();
-        pathPolyline.setPoints(waypoints);
         pathPolyline.getOutlinePaint().setColor(0xFF0000FF); // 藍色路線
         pathPolyline.getOutlinePaint().setStrokeWidth(5f);
+        markersFolder = new FolderOverlay();
+        map.getOverlays().add(markersFolder);
         map.getOverlays().add(pathPolyline);
+
+        addWaypoint(new GeoPoint(25.0350, 121.5674)); // 航點1
+        addWaypoint(new GeoPoint(25.0340, 121.5664)); // 航點2
+        addWaypoint(new GeoPoint(25.0330, 121.5654)); // 航點3
     }
 
     // 更新無人機位置的方法
     public void updateDronePosition(double latitude, double longitude, float heading) {
-        GeoPoint newPosition = new GeoPoint(latitude, longitude);
-        droneMarker.setPosition(newPosition);
-
-        // 設置無人機標記的方位角
+        droneMarker.setPosition(new GeoPoint(latitude, longitude));
         droneMarker.setRotation(heading); // 單位為度
-
-        // 更新標記的圖標，以反映方位角
-        // 這裡可以使用一個指向箭頭的圖標
-        droneMarker.setIcon(ContextCompat.getDrawable(this, R.drawable.baseline_navigation_24)); // 需要您提供指向箭頭的圖標
-
         map.invalidate(); // 重繪地圖
     }
 
@@ -170,7 +171,7 @@ public class MainActivity extends AppCompatActivity {
         handler.removeCallbacks(moveDroneRunnable);
     }
 
-    private void initOnlineMap(){
+    private void initOnlineMap() {
 
         OnlineTileSourceBase wmst_emap_3857 = new XYTileSource("wmst_emap_3857", 5, 20, 256, ".png", new String[]{"https://wmts.nlsc.gov.tw/wmts/EMAP/default/EPSG:3857/"}) {
             @Override
@@ -192,9 +193,7 @@ public class MainActivity extends AppCompatActivity {
                 String naeurl = "";
                 try {
                     naeurl = getBaseUrl() + MapTileIndex.getZoom(pMapTileIndex) + "/" + MapTileIndex.getY(pMapTileIndex) + "/" + MapTileIndex.getX(pMapTileIndex);
-                    //Log.e( "zoom",MapTileIndex.getZoom( pMapTileIndex )+"");
                 } catch (Exception e) {
-                    //Log.e( "initimaperror", e.getMessage() );
                 }
                 return naeurl;
             }
@@ -205,4 +204,191 @@ public class MainActivity extends AppCompatActivity {
         tileSources.add(wmst_emap_3857);
         tileSources.add(wmst_PHOTO_MIX_3857);
     }
+
+    @Override
+    public boolean singleTapConfirmedHelper(GeoPoint p) {
+        runOnUiThread(() -> {
+            Toast.makeText(this,
+                    "點擊位置: " + p.getLatitude() + ", " + p.getLongitude(),
+                    Toast.LENGTH_SHORT).show();
+            addWaypoint(p);
+        });
+        return true;
+    }
+
+    private void addWaypoint(GeoPoint newPoint) {
+        String uuid = UUID.randomUUID().toString();
+        Marker newMarker = new Marker(map);
+        newMarker.setPosition(newPoint);
+        newMarker.setIcon(ContextCompat.getDrawable(this, R.drawable.location_on));
+        newMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
+        newMarker.setTitle("航點" + (waypointDict.size() + 1));
+        newMarker.setRelatedObject(uuid);  // 保存 UUID
+        newMarker.setOnMarkerClickListener((marker, mapView) -> {
+            // 顯示對話框
+            new AlertDialog.Builder(this)
+                    .setTitle("航點操作")
+                    .setItems(new String[]{"顯示資訊", "刪除航點"}, (dialog, which) -> {
+                        switch (which) {
+                            case 0: // 顯示資訊
+                                marker.showInfoWindow();
+                                break;
+                            case 1: // 刪除航點
+                                notifyDeleteMarker(marker);
+                                break;
+                        }
+                    })
+                    .show();
+            return true; // 返回 true 表示我們已經處理了這個點擊事件
+        });
+        newMarker.setDraggable(true);
+        newMarker.setOnMarkerDragListener(new Marker.OnMarkerDragListener() {
+            @Override
+            public void onMarkerDrag(Marker marker) {
+                // 拖動過程中更新路徑
+                updatePathForMarker(marker);
+            }
+
+            @Override
+            public void onMarkerDragEnd(Marker marker) {
+                // 拖動結束後更新路徑和航點列表
+                updatePathForMarker(marker);
+                Toast.makeText(MainActivity.this, "航點位置已更新", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onMarkerDragStart(Marker marker) {
+                // 開始拖動時可以添加一些視覺效果或提示
+                marker.closeInfoWindow(); // 如果有信息窗口打開，先關閉它
+            }
+        });
+
+        markersFolder.add(newMarker);
+        waypointDict.put(uuid, newPoint);
+        pathPolyline.setPoints(new ArrayList<>(waypointDict.values()));
+        map.invalidate();
+    }
+
+    private void updatePathForMarker(Marker marker) {
+        String uuid = (String) marker.getRelatedObject();
+        GeoPoint currPoint = marker.getPosition();
+
+        if (uuid != null && waypointDict.containsKey(uuid)) {
+            waypointDict.put(uuid, currPoint);  // 更新 HashMap
+            // 直接使用 waypointDict 的值更新路徑
+            pathPolyline.setPoints(new ArrayList<>(waypointDict.values()));
+            map.invalidate();
+        }
+    }
+
+    private void notifyDeleteMarker(Marker marker) {
+        new AlertDialog.Builder(this)
+                .setTitle("刪除航點")
+                .setMessage("確定要刪除這個航點嗎？")
+                .setPositiveButton("確定", (d, w) -> deleteWaypoint(marker))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+
+    private void deleteWaypoint(Marker markerToDelete) {
+        String uuid = (String) markerToDelete.getRelatedObject();
+
+        if (uuid != null && waypointDict.containsKey(uuid)) {
+            waypointDict.remove(uuid);
+            markersFolder.remove(markerToDelete);
+            // 直接使用 waypointDict 的值更新路徑
+            pathPolyline.setPoints(new ArrayList<>(waypointDict.values()));
+            updateWaypointTitles();
+            map.invalidate();
+            Toast.makeText(this, "已刪除航點", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void deleteWaypoint(GeoPoint p) {
+        if (waypointDict.isEmpty()) {
+            return;
+        }
+
+        // 找到最近的航點
+        GeoPoint closestPoint = null;
+        double minDistance = Double.MAX_VALUE;
+        Marker markerToDelete = null;
+
+        for (Object item : markersFolder.getItems()) {
+            if (item instanceof Marker) {
+                Marker marker = (Marker) item;
+                double distance = marker.getPosition().distanceToAsDouble(p);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = marker.getPosition();
+                    markerToDelete = marker;
+                }
+            }
+        }
+
+        // 如果找到的點距離點擊位置小於一定閾值（例如50米），則刪除該點
+        if (markerToDelete != null && minDistance < 50) {
+            notifyDeleteMarker(markerToDelete);
+        }
+    }
+
+
+
+    // 修改 longPressHelper 方法來觸發刪除功能
+    @Override
+    public boolean longPressHelper(GeoPoint p) {
+        runOnUiThread(() -> {
+            deleteWaypoint(p);
+        });
+        return true;
+    }
+
+    // 更新所有航點的標題編號
+    private void updateWaypointTitles() {
+        int index = 1;
+        for (Object item : markersFolder.getItems()) {
+            if (item instanceof Marker) {
+                Marker marker = (Marker) item;
+                marker.setTitle("航點" + index);
+                index++;
+            }
+        }
+    }
+
+    private void centerOnRoute() {
+        if (waypointDict.isEmpty()) {
+            Toast.makeText(this, "尚未設置航點", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        List<GeoPoint> points = new ArrayList<>(waypointDict.values());
+
+        // 如果只有一個航點
+        if (points.size() == 1) {
+            map.getController().animateTo(points.get(0));
+            map.getController().setZoom(15.0);
+            return;
+        }
+
+        // 創建一個邊界框來包含所有航點
+        BoundingBox boundingBox = BoundingBox.fromGeoPoints(points);
+
+        // 計算緯度和經度的跨度
+        double latSpan = boundingBox.getLatNorth() - boundingBox.getLatSouth();
+        double lonSpan = boundingBox.getLonEast() - boundingBox.getLonWest();
+
+        // 添加 10% 的邊距
+        BoundingBox boxWithMargin = new BoundingBox(
+                boundingBox.getLatNorth() + (latSpan * 0.1),  // 北緯 + 邊距
+                boundingBox.getLonEast() + (lonSpan * 0.1),   // 東經 + 邊距
+                boundingBox.getLatSouth() - (latSpan * 0.1),  // 南緯 - 邊距
+                boundingBox.getLonWest() - (lonSpan * 0.1)    // 西經 - 邊距
+        );
+
+        // 設置地圖邊界並添加動畫效果
+        map.zoomToBoundingBox(boxWithMargin, true, 1);  // 1000ms = 1秒動畫
+    }
+
+
 }
