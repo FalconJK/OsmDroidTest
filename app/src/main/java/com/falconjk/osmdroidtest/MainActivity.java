@@ -30,6 +30,7 @@ import org.osmdroid.views.overlay.Polyline;
 
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
@@ -295,6 +296,9 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         String uuid = (String) markerToDelete.getRelatedObject();
         if (uuid == null || !markersDict.containsKey(uuid)) return;
 
+        if (markerToDelete.isInfoWindowShown()) {
+            markerToDelete.closeInfoWindow();
+        }
         markersDict.remove(uuid);
         markersFolder.remove(markerToDelete);
         pathPolyline.setPoints(getGeoPointList());
