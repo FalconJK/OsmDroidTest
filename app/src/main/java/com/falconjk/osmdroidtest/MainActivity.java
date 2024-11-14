@@ -7,6 +7,7 @@ import android.preference.PreferenceManager;
 import android.widget.Button;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
@@ -32,6 +33,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 public class MainActivity extends AppCompatActivity implements MapEventsReceiver {
 
@@ -44,7 +47,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
     private Button btn_switchLayer;
     private static final int MOVE_INTERVAL = 1000; // 每秒移動一次
     private List<ITileSource> tileSources;
-    private LinkedHashMap<String, GeoPoint> waypointDict;
+    private LinkedHashMap<String, Marker> markersDict;
 
     private FolderOverlay markersFolder;
     private Button btn_center;
@@ -112,7 +115,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
 
     private void initWaypoints() {
         // 創建航點列表（示例航點）
-        waypointDict = new LinkedHashMap<>();
+        markersDict = new LinkedHashMap<>();
         pathPolyline = new Polyline();
         pathPolyline.getOutlinePaint().setColor(0xFF0000FF); // 藍色路線
         pathPolyline.getOutlinePaint().setStrokeWidth(5f);
@@ -222,7 +225,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         newMarker.setPosition(newPoint);
         newMarker.setIcon(ContextCompat.getDrawable(this, R.drawable.location_on));
         newMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
-        newMarker.setTitle("航點" + (waypointDict.size() + 1));
+        newMarker.setTitle("航點" + (markersDict.size() + 1));
         newMarker.setRelatedObject(uuid);  // 保存 UUID
         newMarker.setOnMarkerClickListener((marker, mapView) -> {
             // 顯示對話框
@@ -264,8 +267,8 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         });
 
         markersFolder.add(newMarker);
-        waypointDict.put(uuid, newPoint);
-        pathPolyline.setPoints(new ArrayList<>(waypointDict.values()));
+        markersDict.put(uuid, newMarker);
+        pathPolyline.addPoint(newPoint);
         map.invalidate();
     }
 
@@ -273,12 +276,9 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         String uuid = (String) marker.getRelatedObject();
         GeoPoint currPoint = marker.getPosition();
 
-        if (uuid != null && waypointDict.containsKey(uuid)) {
-            waypointDict.put(uuid, currPoint);  // 更新 HashMap
-            // 直接使用 waypointDict 的值更新路徑
-            pathPolyline.setPoints(new ArrayList<>(waypointDict.values()));
-            map.invalidate();
-        }
+        if (uuid == null || !markersDict.containsKey(uuid)) return;
+        markersDict.put(uuid, marker);
+        pathPolyline.setPoints(getGeoPointList());
     }
 
     private void notifyDeleteMarker(Marker marker) {
@@ -293,37 +293,30 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
 
     private void deleteWaypoint(Marker markerToDelete) {
         String uuid = (String) markerToDelete.getRelatedObject();
+        if (uuid == null || !markersDict.containsKey(uuid)) return;
 
-        if (uuid != null && waypointDict.containsKey(uuid)) {
-            waypointDict.remove(uuid);
-            markersFolder.remove(markerToDelete);
-            // 直接使用 waypointDict 的值更新路徑
-            pathPolyline.setPoints(new ArrayList<>(waypointDict.values()));
-            updateWaypointTitles();
-            map.invalidate();
-            Toast.makeText(this, "已刪除航點", Toast.LENGTH_SHORT).show();
-        }
+        markersDict.remove(uuid);
+        markersFolder.remove(markerToDelete);
+        pathPolyline.setPoints(getGeoPointList());
+        updateWaypointTitles();
+        map.invalidate();
+        Toast.makeText(this, "已刪除航點", Toast.LENGTH_SHORT).show();
     }
 
     private void deleteWaypoint(GeoPoint p) {
-        if (waypointDict.isEmpty()) {
+        if (markersDict.isEmpty()) {
             return;
         }
 
         // 找到最近的航點
-        GeoPoint closestPoint = null;
         double minDistance = Double.MAX_VALUE;
         Marker markerToDelete = null;
 
-        for (Object item : markersFolder.getItems()) {
-            if (item instanceof Marker) {
-                Marker marker = (Marker) item;
-                double distance = marker.getPosition().distanceToAsDouble(p);
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    closestPoint = marker.getPosition();
-                    markerToDelete = marker;
-                }
+        for (Marker marker : markersDict.values()) {
+            double distance = marker.getPosition().distanceToAsDouble(p);
+            if (distance < minDistance) {
+                minDistance = distance;
+                markerToDelete = marker;
             }
         }
 
@@ -332,7 +325,6 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
             notifyDeleteMarker(markerToDelete);
         }
     }
-
 
 
     // 修改 longPressHelper 方法來觸發刪除功能
@@ -346,23 +338,17 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
 
     // 更新所有航點的標題編號
     private void updateWaypointTitles() {
-        int index = 1;
-        for (Object item : markersFolder.getItems()) {
-            if (item instanceof Marker) {
-                Marker marker = (Marker) item;
-                marker.setTitle("航點" + index);
-                index++;
-            }
-        }
+        AtomicInteger index = new AtomicInteger(1);
+        markersDict.values().forEach(marker -> marker.setTitle("航點" + (index.getAndIncrement())));
     }
 
     private void centerOnRoute() {
-        if (waypointDict.isEmpty()) {
+        if (markersDict.isEmpty()) {
             Toast.makeText(this, "尚未設置航點", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        List<GeoPoint> points = new ArrayList<>(waypointDict.values());
+        List<GeoPoint> points = getGeoPointList();
 
         // 如果只有一個航點
         if (points.size() == 1) {
@@ -390,5 +376,10 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         map.zoomToBoundingBox(boxWithMargin, true, 1);  // 1000ms = 1秒動畫
     }
 
-
+    @NonNull
+    private List<GeoPoint> getGeoPointList() {
+        return markersDict.values().stream()
+                .map(Marker::getPosition)
+                .collect(Collectors.toList());
+    }
 }
