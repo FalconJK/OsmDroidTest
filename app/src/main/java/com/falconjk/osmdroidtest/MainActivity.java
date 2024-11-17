@@ -30,7 +30,6 @@ import org.osmdroid.views.overlay.Polyline;
 
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
@@ -49,6 +48,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
     private static final int MOVE_INTERVAL = 1000; // 每秒移動一次
     private List<ITileSource> tileSources;
     private LinkedHashMap<String, Marker> markersDict;
+    private LinkedHashMap<String, Marker> arrowsDict;
 
     private FolderOverlay markersFolder;
     private Button btn_center;
@@ -117,16 +117,18 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
     private void initWaypoints() {
         // 創建航點列表（示例航點）
         markersDict = new LinkedHashMap<>();
+        arrowsDict = new LinkedHashMap<>();
         pathPolyline = new Polyline();
         pathPolyline.getOutlinePaint().setColor(0xFF0000FF); // 藍色路線
         pathPolyline.getOutlinePaint().setStrokeWidth(5f);
         markersFolder = new FolderOverlay();
-        map.getOverlays().add(markersFolder);
         map.getOverlays().add(pathPolyline);
+        map.getOverlays().add(markersFolder);
 
-        addWaypoint(new GeoPoint(25.0350, 121.5674)); // 航點1
-        addWaypoint(new GeoPoint(25.0340, 121.5664)); // 航點2
-        addWaypoint(new GeoPoint(25.0330, 121.5654)); // 航點3
+        addWaypoint(new GeoPoint(25.0350, 121.5674), false); // 航點1
+        addWaypoint(new GeoPoint(25.0340, 121.5664), false); // 航點2
+        addWaypoint(new GeoPoint(25.0330, 121.5654), false); // 航點3
+        map.invalidate();
     }
 
     // 更新無人機位置的方法
@@ -215,12 +217,12 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
             Toast.makeText(this,
                     "點擊位置: " + p.getLatitude() + ", " + p.getLongitude(),
                     Toast.LENGTH_SHORT).show();
-            addWaypoint(p);
+            addWaypoint(p, true);
         });
         return true;
     }
 
-    private void addWaypoint(GeoPoint newPoint) {
+    private void addWaypoint(GeoPoint newPoint, boolean invalidateNow) {
         String uuid = UUID.randomUUID().toString();
         Marker newMarker = new Marker(map);
         newMarker.setPosition(newPoint);
@@ -267,20 +269,99 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
             }
         });
 
+        if (!markersDict.isEmpty()) {
+            Marker lastMarker = markersDict.values().stream().reduce((a, b) -> b).orElse(null);
+            if (lastMarker != null) {
+                Marker arrowMarker = createPolylineArrowMarker(lastMarker, newMarker);
+                markersFolder.add(arrowMarker);
+                arrowsDict.put(uuid, arrowMarker);
+            }
+        }
+
+
         markersFolder.add(newMarker);
         markersDict.put(uuid, newMarker);
         pathPolyline.addPoint(newPoint);
-        map.invalidate();
+        if (invalidateNow)
+            map.invalidate();
+    }
+
+    private Marker createPolylineArrowMarker(Marker lastMarker, Marker newMarker) {
+        GeoPoint lastMarkerPosition = lastMarker.getPosition();
+        GeoPoint newMarkerPosition = newMarker.getPosition();
+
+        GeoPoint midMarkerPosition = new GeoPoint(
+                (lastMarkerPosition.getLatitude() + newMarkerPosition.getLatitude()) / 2,
+                (lastMarkerPosition.getLongitude() + newMarkerPosition.getLongitude()) / 2
+        );
+
+        // mid marker rotation
+        double bearing = Math.toDegrees(Math.atan2(
+                newMarkerPosition.getLongitude() - lastMarkerPosition.getLongitude(),
+                newMarkerPosition.getLatitude() - lastMarkerPosition.getLatitude()
+        ));
+        float rotation = (float)(360 - bearing) % 360;  // 將順時針轉換為逆時針
+
+
+
+        String uuidNext = (String)newMarker.getRelatedObject();
+        Marker arrowMarker = arrowsDict.getOrDefault(uuidNext, new Marker(map));
+
+        arrowMarker.setPosition(midMarkerPosition);
+        arrowMarker.setRotation(rotation);
+        arrowMarker.setRelatedObject(uuidNext);
+        if (!arrowsDict.containsKey(uuidNext)) {
+            arrowMarker.setIcon(ContextCompat.getDrawable(this, R.drawable.baseline_keyboard_arrow_up_24));
+            arrowMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER);
+            arrowMarker.setDraggable(false);
+        }
+
+
+        arrowsDict.put(uuidNext, arrowMarker);
+        return arrowMarker;
     }
 
     private void updatePathForMarker(Marker marker) {
         String uuid = (String) marker.getRelatedObject();
-        GeoPoint currPoint = marker.getPosition();
 
         if (uuid == null || !markersDict.containsKey(uuid)) return;
         markersDict.put(uuid, marker);
-        pathPolyline.setPoints(getGeoPointList());
+        ArrayList<Marker> markers = new ArrayList<>(markersDict.values());
+        int index = markers.indexOf(marker);
+
+        // 更新與前一個點之間的箭頭（如果存在）
+        if (index > 0) {
+            Marker previousMarker = markers.get(index - 1);
+            // 先移除舊的箭頭
+            if (arrowsDict.containsKey(uuid)) {
+                Marker oldArrow = arrowsDict.get(uuid);
+                markersFolder.remove(oldArrow);
+            }
+            // 創建新的箭頭
+            Marker newArrow = createPolylineArrowMarker(previousMarker, marker);
+            markersFolder.add(newArrow);
+            arrowsDict.put(uuid, newArrow);
+        }
+
+        // 更新與後一個點之間的箭頭（如果存在）
+        if (index < markers.size() - 1) {
+            Marker nextMarker = markers.get(index + 1);
+            String nextUuid = (String) nextMarker.getRelatedObject();
+            // 先移除舊的箭頭
+            if (arrowsDict.containsKey(nextUuid)) {
+                Marker oldArrow = arrowsDict.get(nextUuid);
+                markersFolder.remove(oldArrow);
+            }
+            // 創建新的箭頭
+            Marker newArrow = createPolylineArrowMarker(marker, nextMarker);
+            markersFolder.add(newArrow);
+            arrowsDict.put(nextUuid, newArrow);
+        }
+
+        pathPolyline.setPoints(getWaypointPointList());
+        map.invalidate();
     }
+
 
     private void notifyDeleteMarker(Marker marker) {
         new AlertDialog.Builder(this)
@@ -299,9 +380,51 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         if (markerToDelete.isInfoWindowShown()) {
             markerToDelete.closeInfoWindow();
         }
+
+        // 獲取marker的索引，用於更新相鄰箭頭
+        ArrayList<Marker> markers = new ArrayList<>(markersDict.values());
+        int index = markers.indexOf(markerToDelete);
+
+        // 刪除與該點相關的箭頭
+        if (arrowsDict.containsKey(uuid)) {
+            Marker arrowMarker = arrowsDict.get(uuid);
+            markersFolder.remove(arrowMarker);
+            arrowsDict.remove(uuid);
+        }
+
+        // 如果不是第一個點，還需要刪除前一個點指向該點的箭頭
+        if (index > 0) {
+            String prevUuid = (String) markers.get(index - 1).getRelatedObject();
+            if (prevUuid != null && arrowsDict.containsKey(uuid)) {
+                Marker prevArrowMarker = arrowsDict.get(uuid);
+                markersFolder.remove(prevArrowMarker);
+                arrowsDict.remove(uuid);
+            }
+        }
+
+        // 如果不是最後一個點，且不是第一個點，需要創建新的連接箭頭
+        if (index < markers.size() - 1 && index > 0) {
+            Marker prevMarker = markers.get(index - 1);
+            Marker nextMarker = markers.get(index + 1);
+            String nextUuid = (String) nextMarker.getRelatedObject();
+
+            // 創建新的箭頭
+            Marker newArrowMarker = createPolylineArrowMarker(prevMarker, nextMarker);
+
+            // 移除舊的箭頭（如果存在）
+            if (arrowsDict.containsKey(nextUuid)) {
+                Marker oldArrow = arrowsDict.get(nextUuid);
+                markersFolder.remove(oldArrow);
+            }
+
+            // 添加新的箭頭
+            markersFolder.add(newArrowMarker);
+            arrowsDict.put(nextUuid, newArrowMarker);
+        }
+
         markersDict.remove(uuid);
         markersFolder.remove(markerToDelete);
-        pathPolyline.setPoints(getGeoPointList());
+        pathPolyline.setPoints(getWaypointPointList());
         updateWaypointTitles();
         map.invalidate();
         Toast.makeText(this, "已刪除航點", Toast.LENGTH_SHORT).show();
@@ -352,7 +475,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
             return;
         }
 
-        List<GeoPoint> points = getGeoPointList();
+        List<GeoPoint> points = getWaypointPointList();
 
         // 如果只有一個航點
         if (points.size() == 1) {
@@ -381,7 +504,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
     }
 
     @NonNull
-    private List<GeoPoint> getGeoPointList() {
+    private List<GeoPoint> getWaypointPointList() {
         return markersDict.values().stream()
                 .map(Marker::getPosition)
                 .collect(Collectors.toList());
