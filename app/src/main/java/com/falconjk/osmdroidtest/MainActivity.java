@@ -1,9 +1,13 @@
 package com.falconjk.osmdroidtest;
 
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.BitmapDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.preference.PreferenceManager;
+import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
 
@@ -42,7 +46,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
 
     private MapView map;
     private Marker droneMarker; // 無人機標記
-    private Polyline pathPolyline; // 航點路線
+    private Polyline pathInnerPolyline; // 航點路線
 
     private Handler handler;
     private Runnable moveDroneRunnable;
@@ -55,6 +59,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
     private FolderOverlay markersFolder;
     private Button btn_center;
     private Handler mHandler;
+    private Polyline pathOutterPolyline;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -122,11 +127,15 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         // 創建航點列表（示例航點）
         markersDict = new LinkedHashMap<>();
         arrowsDict = new LinkedHashMap<>();
-        pathPolyline = new Polyline();
-        pathPolyline.getOutlinePaint().setColor(0xFF0000FF); // 藍色路線
-        pathPolyline.getOutlinePaint().setStrokeWidth(5f);
+        pathInnerPolyline = new Polyline();
+        pathOutterPolyline = new Polyline();
+        pathInnerPolyline.getOutlinePaint().setColor(getColor(R.color.route_inner_color)); // 藍色路線
+        pathOutterPolyline.getOutlinePaint().setColor(getColor(R.color.color_bright_blue)); // 藍色路線
+        pathInnerPolyline.getOutlinePaint().setStrokeWidth(13f);
+        pathOutterPolyline.getOutlinePaint().setStrokeWidth(22f);
         markersFolder = new FolderOverlay();
-        map.getOverlays().add(pathPolyline);
+        map.getOverlays().add(pathOutterPolyline);
+        map.getOverlays().add(pathInnerPolyline);
         map.getOverlays().add(markersFolder);
 
         addWaypoint(new GeoPoint(25.0350, 121.5674), false); // 航點1
@@ -230,7 +239,28 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         String uuid = UUID.randomUUID().toString();
         Marker newMarker = new Marker(map);
         newMarker.setPosition(newPoint);
-        newMarker.setIcon(ContextCompat.getDrawable(this, R.drawable.location_on));
+        // 創建帶數字的標記視圖
+        NumberedMarkerView markerView = new NumberedMarkerView(this);
+        markerView.setNumber(String.valueOf(markersDict.size() + 1));
+
+        // 使用固定尺寸創建位圖
+        Bitmap bitmap = Bitmap.createBitmap(
+                NumberedMarkerView.MARKER_SIZE,
+                NumberedMarkerView.MARKER_SIZE,
+                Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        // 強制進行一次布局
+        markerView.measure(
+                View.MeasureSpec.makeMeasureSpec(NumberedMarkerView.MARKER_SIZE, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(NumberedMarkerView.MARKER_SIZE, View.MeasureSpec.EXACTLY)
+        );
+        markerView.layout(0, 0, NumberedMarkerView.MARKER_SIZE, NumberedMarkerView.MARKER_SIZE);
+
+        markerView.draw(canvas);
+        BitmapDrawable drawable = new BitmapDrawable(getResources(), bitmap);
+
+        newMarker.setIcon(drawable);
         newMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM);
         newMarker.setTitle("航點" + (markersDict.size() + 1));
         newMarker.setRelatedObject(uuid);  // 保存 UUID
@@ -283,7 +313,8 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
 
         markersFolder.add(newMarker);
         markersDict.put(uuid, newMarker);
-        pathPolyline.addPoint(newPoint);
+        pathInnerPolyline.addPoint(newPoint);
+        pathOutterPolyline.addPoint(newPoint);
         if (invalidateNow)
             map.invalidate();
     }
@@ -350,7 +381,37 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
             updatePolylineArrowMarkers(marker, markers.get(index + 1));
         }
 
-        pathPolyline.setPoints(getWaypointPointList());
+        List<GeoPoint> waypointPointList = getWaypointPointList();
+        pathInnerPolyline.setPoints(waypointPointList);
+        pathOutterPolyline.setPoints(waypointPointList);
+        map.invalidate();
+    }
+
+    // 更新所有標記的數字
+    private void updateWaypointNumbers() {
+        ArrayList<Marker> markers = new ArrayList<>(markersDict.values());
+        for (int i = 0; i < markers.size(); i++) {
+            Marker marker = markers.get(i);
+            NumberedMarkerView markerView = new NumberedMarkerView(this);
+            markerView.setNumber(String.valueOf(i + 1));
+
+            Bitmap bitmap = Bitmap.createBitmap(
+                    NumberedMarkerView.MARKER_SIZE,
+                    NumberedMarkerView.MARKER_SIZE,
+                    Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+
+            markerView.measure(
+                    View.MeasureSpec.makeMeasureSpec(NumberedMarkerView.MARKER_SIZE, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(NumberedMarkerView.MARKER_SIZE, View.MeasureSpec.EXACTLY)
+            );
+            markerView.layout(0, 0, NumberedMarkerView.MARKER_SIZE, NumberedMarkerView.MARKER_SIZE);
+
+            markerView.draw(canvas);
+            BitmapDrawable drawable = new BitmapDrawable(getResources(), bitmap);
+
+            marker.setIcon(drawable);
+        }
         map.invalidate();
     }
 
@@ -406,8 +467,11 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         markersFolder.remove(markerToDelete);
 
         // 5. 更新路徑和標題
-        pathPolyline.setPoints(getWaypointPointList());
+        List<GeoPoint> waypointPointList = getWaypointPointList();
+        pathOutterPolyline.setPoints(waypointPointList);
+        pathInnerPolyline.setPoints(waypointPointList);
         updateWaypointTitles();
+        updateWaypointNumbers();
         map.invalidate();
         Toast.makeText(this, "已刪除航點", Toast.LENGTH_SHORT).show();
     }

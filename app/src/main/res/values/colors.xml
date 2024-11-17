@@ -2,4 +2,29 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="route_sea_green">#2E8B57</color>
+
+    <color name="waypoint_red">#D04646</color>
+    <color name="route_medium_purple">#9370DB</color>
+    <color name="route_dark_orange">#FF8C00</color>
+    <color name="route_royal_blue">#4169E1</color>
+    <color name="route_dodger_blue">#1E90FF</color>
+    <color name="route_dodger_blue2">#2196F3</color>
+
+    <color name="color_magenta">#FF00FF</color>        <!-- 洋紅色 - 非常醒目 -->
+    <color name="color_hot_pink">#FF69B4</color>       <!-- 亮粉紅 - 柔和但清晰 -->
+    <color name="color_neon_blue">#00BFFF</color>      <!-- 霓虹藍 - 明亮清晰 -->
+    <color name="color_bright_orange">#FF6600</color>  <!-- 亮橙色 - 高對比 -->
+    <color name="color_bright_purple">#9933FF</color>  <!-- 亮紫色 - 醒目 -->
+
+    <color name="color_bright_blue">#007FFF</color>      <!-- 亮藍色 - 類似 Azure 藍 -->
+    <color name="color_electric_blue">#0066CC</color>    <!-- 電光藍 - 較深的藍色 -->
+    <color name="color_vivid_purple">#8A2BE2</color>     <!-- 鮮紫色 -->
+    <color name="color_deep_cyan">#008B8B</color>        <!-- 深青色 -->
+    <color name="yellow456">#FFEE58</color>        <!-- 深青色 -->
+
+    <!-- 功能性顏色引用 -->
+    <color name="waypoint_color">@color/waypoint_red</color>
+    <color name="route_inner_color">@color/yellow456</color>
+    <color name="route_outer_color">@color/color_bright_blue</color>
 </resources>
