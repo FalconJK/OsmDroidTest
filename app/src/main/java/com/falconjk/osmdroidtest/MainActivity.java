@@ -38,6 +38,8 @@ import java.util.stream.Collectors;
 
 public class MainActivity extends AppCompatActivity implements MapEventsReceiver {
 
+    private static final int ARROWS_PER_LINE = 2; // 每條線上的箭頭數量，可以根據需求調整
+
     private MapView map;
     private Marker droneMarker; // 無人機標記
     private Polyline pathPolyline; // 航點路線
@@ -52,6 +54,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
 
     private FolderOverlay markersFolder;
     private Button btn_center;
+    private Handler mHandler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,6 +63,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         // 初始化OSMdroid配置
         Configuration.getInstance().load(getApplicationContext(),
                 PreferenceManager.getDefaultSharedPreferences(getApplicationContext()));
+        mHandler = new Handler(Looper.getMainLooper());
         map = (MapView) findViewById(R.id.mapview);
         // 基本地圖設置
 //        map.setTileSource(TileSourceFactory.MAPNIK);
@@ -272,9 +276,7 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         if (!markersDict.isEmpty()) {
             Marker lastMarker = markersDict.values().stream().reduce((a, b) -> b).orElse(null);
             if (lastMarker != null) {
-                Marker arrowMarker = createPolylineArrowMarker(lastMarker, newMarker);
-                markersFolder.add(arrowMarker);
-                arrowsDict.put(uuid, arrowMarker);
+                updatePolylineArrowMarkers(lastMarker, newMarker);
             }
         }
 
@@ -286,82 +288,71 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
             map.invalidate();
     }
 
-    private Marker createPolylineArrowMarker(Marker lastMarker, Marker newMarker) {
-        GeoPoint lastMarkerPosition = lastMarker.getPosition();
-        GeoPoint newMarkerPosition = newMarker.getPosition();
+    private void updatePolylineArrowMarkers(Marker startMarker, Marker endMarker) {
+        GeoPoint startPoint = startMarker.getPosition();
+        GeoPoint endPoint = endMarker.getPosition();
+        String uuidNext = (String) endMarker.getRelatedObject();
 
-        GeoPoint midMarkerPosition = new GeoPoint(
-                (lastMarkerPosition.getLatitude() + newMarkerPosition.getLatitude()) / 2,
-                (lastMarkerPosition.getLongitude() + newMarkerPosition.getLongitude()) / 2
-        );
-
-        // mid marker rotation
+        // 計算方位角
         double bearing = Math.toDegrees(Math.atan2(
-                newMarkerPosition.getLongitude() - lastMarkerPosition.getLongitude(),
-                newMarkerPosition.getLatitude() - lastMarkerPosition.getLatitude()
+                endPoint.getLongitude() - startPoint.getLongitude(),
+                endPoint.getLatitude() - startPoint.getLatitude()
         ));
-        float rotation = (float)(360 - bearing) % 360;  // 將順時針轉換為逆時針
+        float rotation = (float) (360 - bearing) % 360;
 
+        // 計算每段的距離比例
+        double segmentRatio = 1.0 / (ARROWS_PER_LINE + 1);
 
+        // 更新或創建箭頭標記
+        for (int i = 1; i <= ARROWS_PER_LINE; i++) {
+            // 計算箭頭位置
+            double ratio = segmentRatio * i;
+            GeoPoint arrowPosition = new GeoPoint(
+                    startPoint.getLatitude() + (endPoint.getLatitude() - startPoint.getLatitude()) * ratio,
+                    startPoint.getLongitude() + (endPoint.getLongitude() - startPoint.getLongitude()) * ratio
+            );
 
-        String uuidNext = (String)newMarker.getRelatedObject();
-        Marker arrowMarker = arrowsDict.getOrDefault(uuidNext, new Marker(map));
+            String arrowId = uuidNext + "_" + i;
+            Marker arrowMarker = arrowsDict.get(arrowId);
 
-        arrowMarker.setPosition(midMarkerPosition);
-        arrowMarker.setRotation(rotation);
-        arrowMarker.setRelatedObject(uuidNext);
-        if (!arrowsDict.containsKey(uuidNext)) {
-            arrowMarker.setIcon(ContextCompat.getDrawable(this, R.drawable.baseline_keyboard_arrow_up_24));
-            arrowMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER);
-            arrowMarker.setDraggable(false);
+            // 如果箭頭不存在，創建新的
+            if (arrowMarker == null) {
+                arrowMarker = new Marker(map);
+                arrowMarker.setIcon(ContextCompat.getDrawable(this, R.drawable.baseline_keyboard_arrow_up_24));
+                arrowMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER);
+                arrowMarker.setDraggable(false);
+                arrowMarker.setRelatedObject(arrowId);
+                arrowsDict.put(arrowId, arrowMarker);
+                markersFolder.add(arrowMarker);
+            }
+
+            // 更新位置和旋轉
+            arrowMarker.setPosition(arrowPosition);
+            arrowMarker.setRotation(rotation);
         }
-
-
-        arrowsDict.put(uuidNext, arrowMarker);
-        return arrowMarker;
     }
 
     private void updatePathForMarker(Marker marker) {
         String uuid = (String) marker.getRelatedObject();
-
         if (uuid == null || !markersDict.containsKey(uuid)) return;
+
         markersDict.put(uuid, marker);
         ArrayList<Marker> markers = new ArrayList<>(markersDict.values());
         int index = markers.indexOf(marker);
 
-        // 更新與前一個點之間的箭頭（如果存在）
+        // 更新與前一個點之間的箭頭
         if (index > 0) {
-            Marker previousMarker = markers.get(index - 1);
-            // 先移除舊的箭頭
-            if (arrowsDict.containsKey(uuid)) {
-                Marker oldArrow = arrowsDict.get(uuid);
-                markersFolder.remove(oldArrow);
-            }
-            // 創建新的箭頭
-            Marker newArrow = createPolylineArrowMarker(previousMarker, marker);
-            markersFolder.add(newArrow);
-            arrowsDict.put(uuid, newArrow);
+            updatePolylineArrowMarkers(markers.get(index - 1), marker);
         }
 
-        // 更新與後一個點之間的箭頭（如果存在）
+        // 更新與後一個點之間的箭頭
         if (index < markers.size() - 1) {
-            Marker nextMarker = markers.get(index + 1);
-            String nextUuid = (String) nextMarker.getRelatedObject();
-            // 先移除舊的箭頭
-            if (arrowsDict.containsKey(nextUuid)) {
-                Marker oldArrow = arrowsDict.get(nextUuid);
-                markersFolder.remove(oldArrow);
-            }
-            // 創建新的箭頭
-            Marker newArrow = createPolylineArrowMarker(marker, nextMarker);
-            markersFolder.add(newArrow);
-            arrowsDict.put(nextUuid, newArrow);
+            updatePolylineArrowMarkers(marker, markers.get(index + 1));
         }
 
         pathPolyline.setPoints(getWaypointPointList());
         map.invalidate();
     }
-
 
     private void notifyDeleteMarker(Marker marker) {
         new AlertDialog.Builder(this)
@@ -372,58 +363,49 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
                 .show();
     }
 
-
     private void deleteWaypoint(Marker markerToDelete) {
         String uuid = (String) markerToDelete.getRelatedObject();
         if (uuid == null || !markersDict.containsKey(uuid)) return;
 
-        if (markerToDelete.isInfoWindowShown()) {
-            markerToDelete.closeInfoWindow();
-        }
-
-        // 獲取marker的索引，用於更新相鄰箭頭
         ArrayList<Marker> markers = new ArrayList<>(markersDict.values());
         int index = markers.indexOf(markerToDelete);
 
-        // 刪除與該點相關的箭頭
-        if (arrowsDict.containsKey(uuid)) {
-            Marker arrowMarker = arrowsDict.get(uuid);
-            markersFolder.remove(arrowMarker);
-            arrowsDict.remove(uuid);
-        }
-
-        // 如果不是第一個點，還需要刪除前一個點指向該點的箭頭
+        // 1. 刪除指向當前點的箭頭（來自前一個點的箭頭）
         if (index > 0) {
-            String prevUuid = (String) markers.get(index - 1).getRelatedObject();
-            if (prevUuid != null && arrowsDict.containsKey(uuid)) {
-                Marker prevArrowMarker = arrowsDict.get(uuid);
-                markersFolder.remove(prevArrowMarker);
-                arrowsDict.remove(uuid);
+            String currentUuid = uuid;
+            for (int i = 1; i <= ARROWS_PER_LINE; i++) {
+                String arrowId = currentUuid + "_" + i;
+                Marker arrowMarker = arrowsDict.remove(arrowId);
+                if (arrowMarker != null) {
+                    markersFolder.remove(arrowMarker);
+                }
             }
         }
 
-        // 如果不是最後一個點，且不是第一個點，需要創建新的連接箭頭
-        if (index < markers.size() - 1 && index > 0) {
+        // 2. 刪除從當前點指向下一個點的箭頭
+        if (index < markers.size() - 1) {
+            String nextUuid = (String) markers.get(index + 1).getRelatedObject();
+            for (int i = 1; i <= ARROWS_PER_LINE; i++) {
+                String arrowId = nextUuid + "_" + i;
+                Marker arrowMarker = arrowsDict.remove(arrowId);
+                if (arrowMarker != null) {
+                    markersFolder.remove(arrowMarker);
+                }
+            }
+        }
+
+        // 3. 如果需要連接前後點，創建新的箭頭
+        if (index > 0 && index < markers.size() - 1) {
             Marker prevMarker = markers.get(index - 1);
             Marker nextMarker = markers.get(index + 1);
-            String nextUuid = (String) nextMarker.getRelatedObject();
-
-            // 創建新的箭頭
-            Marker newArrowMarker = createPolylineArrowMarker(prevMarker, nextMarker);
-
-            // 移除舊的箭頭（如果存在）
-            if (arrowsDict.containsKey(nextUuid)) {
-                Marker oldArrow = arrowsDict.get(nextUuid);
-                markersFolder.remove(oldArrow);
-            }
-
-            // 添加新的箭頭
-            markersFolder.add(newArrowMarker);
-            arrowsDict.put(nextUuid, newArrowMarker);
+            updatePolylineArrowMarkers(prevMarker, nextMarker);
         }
 
+        // 4. 刪除waypoint本身
         markersDict.remove(uuid);
         markersFolder.remove(markerToDelete);
+
+        // 5. 更新路徑和標題
         pathPolyline.setPoints(getWaypointPointList());
         updateWaypointTitles();
         map.invalidate();
