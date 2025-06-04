@@ -2,13 +2,17 @@ package com.falconjk.osmdroidtest;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.preference.PreferenceManager;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CompoundButton;
+import android.widget.Switch;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -16,22 +20,23 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
+import org.osmdroid.api.IMapController;
 import org.osmdroid.config.Configuration;
 import org.osmdroid.events.MapEventsReceiver;
+import org.osmdroid.tileprovider.MapTileProviderBasic;
 import org.osmdroid.tileprovider.tilesource.ITileSource;
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase;
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
 import org.osmdroid.tileprovider.tilesource.XYTileSource;
 import org.osmdroid.util.BoundingBox;
+import org.osmdroid.util.GeoPoint;
 import org.osmdroid.util.MapTileIndex;
 import org.osmdroid.views.MapView;
-import org.osmdroid.api.IMapController;
-import org.osmdroid.util.GeoPoint;
 import org.osmdroid.views.overlay.FolderOverlay;
 import org.osmdroid.views.overlay.MapEventsOverlay;
 import org.osmdroid.views.overlay.Marker;
 import org.osmdroid.views.overlay.Polyline;
-
+import org.osmdroid.views.overlay.TilesOverlay;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -60,6 +65,10 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
     private Button btn_center;
     private Handler mHandler;
     private Polyline pathOutterPolyline;
+    private Switch switch_nofly;
+    private Switch switch_power;
+    private TilesOverlay tilesover_limitarea_lay;
+    private TilesOverlay tilesover_power_lay;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -97,9 +106,27 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         btn_center = (Button) findViewById(R.id.btn_center);
         btn_center.setOnClickListener(v -> centerOnRoute());
 
+        switch_nofly = (Switch) findViewById(R.id.switch_nofly);
+        switch_power = (Switch) findViewById(R.id.switch_power);
+
 
         initOnlineMap();
+        initLayer();
         toggleMapLayer();
+
+        switch_nofly.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                showLayer(isChecked, tilesover_limitarea_lay, 1);
+            }
+        });
+
+        switch_power.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                showLayer(isChecked, tilesover_power_lay, 2);
+            }
+        });
     }
 
     private int tileSourcesIndex = 0;
@@ -222,6 +249,48 @@ public class MainActivity extends AppCompatActivity implements MapEventsReceiver
         tileSources.add(TileSourceFactory.MAPNIK);
         tileSources.add(wmst_emap_3857);
         tileSources.add(wmst_PHOTO_MIX_3857);
+    }
+
+    private void initLayer() {
+        MapTileProviderBasic tile_limit_area_provider = new MapTileProviderBasic(this, new OnlineTileSourceBase("MG_RS", 3, 20, 256, ".png", new String[]{"https://earthbook.xyz/tms/LIDAR:noflyarea@EPSG:900913@png/"}) {
+            @Override
+            public String getTileURLString(long pMapTileIndex) {
+
+                String baseUrl = getBaseUrl() + MapTileIndex.getZoom(pMapTileIndex) + "/" + MapTileIndex.getX(pMapTileIndex) + "/" + (int) (Math.pow(2, MapTileIndex.getZoom(pMapTileIndex)) - MapTileIndex.getY(pMapTileIndex) - 1) + ".png";
+                Log.e("baseUrl", baseUrl);
+                return baseUrl;
+            }
+
+        });
+
+
+        tilesover_limitarea_lay = new TilesOverlay(tile_limit_area_provider, this);
+        tile_limit_area_provider.setTileRequestCompleteHandler(map.getTileRequestCompleteHandler());
+        tilesover_limitarea_lay.setLoadingBackgroundColor(Color.TRANSPARENT);
+        tilesover_limitarea_lay.setLoadingLineColor(Color.TRANSPARENT);
+
+        MapTileProviderBasic tile_power_provider = new MapTileProviderBasic(this, new OnlineTileSourceBase("MG_ET", 3, 20, 256, ".png", new String[]{"https://earthbook.xyz/tms/LIDAR:power@EPSG:900913@png/"}) {
+            @Override
+            public String getTileURLString(long pMapTileIndex) {
+
+                String baseUrl = getBaseUrl() + MapTileIndex.getZoom(pMapTileIndex) + "/" + MapTileIndex.getX(pMapTileIndex) + "/" + (int) (Math.pow(2, MapTileIndex.getZoom(pMapTileIndex)) - MapTileIndex.getY(pMapTileIndex) - 1) + ".png";
+                Log.e("baseUrl", baseUrl);
+                return baseUrl;
+            }
+
+        });
+
+        tilesover_power_lay = new TilesOverlay(tile_power_provider, this);
+        tile_power_provider.setTileRequestCompleteHandler(map.getTileRequestCompleteHandler());
+        tilesover_power_lay.setLoadingBackgroundColor(Color.TRANSPARENT);
+        tilesover_power_lay.setLoadingLineColor(Color.TRANSPARENT);
+    }
+
+    private void showLayer(boolean show, TilesOverlay tilesOverlay, int index){
+        if (show)
+            map.getOverlayManager().add(index, tilesOverlay);
+        else
+            map.getOverlayManager().remove(tilesOverlay);
     }
 
     @Override
